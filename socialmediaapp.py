@@ -109,7 +109,7 @@ def get_candidate_socials(name):
 
 # Streamlit UI
 st.title("Ballotpedia Campaign & Social Scraper")
-name = st.text_input("Candidate Name", "Patrick Hope")
+name = st.text_input("Candidate Name", "")
 if st.button("Lookup"):
     bp_url, camp_url, socials = get_candidate_socials(name)
     if bp_url:
