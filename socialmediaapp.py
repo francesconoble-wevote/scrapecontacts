@@ -24,7 +24,7 @@ SOCIAL_DOMAINS = [
     'youtube.com', 'tiktok.com', 'linkedin.com', 'threads.net', 'bsky.app'
 ]
 # Additional domains to exclude for campaign detection
-CAMPAIGN_EXCLUDE = ['jotform.com', 'docs.google.com']
+CAMPAIGN_EXCLUDE = ['jotform.com', 'docs.google.com', 'forms.google.com']
 
 # Common request headers to mimic a browser
 REQUEST_HEADERS = {
