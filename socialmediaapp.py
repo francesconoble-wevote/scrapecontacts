@@ -2,9 +2,9 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 from serpapi import GoogleSearch
 import streamlit as st
-from urllib.parse import urljoin
 
 # Social media regex patterns
 SOCIAL_PATTERNS = {
@@ -18,10 +18,13 @@ SOCIAL_PATTERNS = {
     'Bluesky': r'bsky\.app/',
 }
 
-# Domains to exclude when filtering
-EXCLUDE_DOMAINS = ['ballotpedia', '.gov']
+# Domains to exclude when searching for campaign site
+SOCIAL_DOMAINS = [
+    'twitter.com', 'x.com', 'facebook.com', 'instagram.com',
+    'youtube.com', 'tiktok.com', 'linkedin.com', 'threads.net', 'bsky.app'
+]
 
-# Request headers to mimic a browser
+# Common request headers to mimic a browser
 REQUEST_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -31,113 +34,153 @@ REQUEST_HEADERS = {
 }
 
 
-def find_ballotpedia_url(name, max_pages=2):
-    slug = name.replace(' ', '_')
+def find_ballotpedia_url(candidate_name, max_pages=2):
+    """
+    1) Try canonical URL: https://ballotpedia.org/First_Last
+    2) Fallback: SerpAPI search for Ballotpedia page
+    """
+    slug = candidate_name.replace(' ', '_')
     url = f"https://ballotpedia.org/{slug}"
     try:
-        r = requests.head(url, headers=REQUEST_HEADERS, allow_redirects=True, timeout=5)
-        if r.status_code < 400:
+        resp = requests.head(url, headers=REQUEST_HEADERS, allow_redirects=True, timeout=5)
+        if resp.status_code < 400:
             return url
     except requests.RequestException:
         pass
-    query = f"{name} Ballotpedia site:ballotpedia.org"
+
+    query = f"{candidate_name} Ballotpedia site:ballotpedia.org"
     for page in range(max_pages):
         params = {
-            'engine': 'google', 'q': query,
-            'start': page * 10, 'num': 10,
-            'gl': 'us', 'hl': 'en',
+            'engine': 'google',
+            'q': query,
+            'start': page * 10,
+            'num': 10,
+            'gl': 'us',
+            'hl': 'en',
             'api_key': os.getenv('SERPAPI_API_KEY')
         }
         results = GoogleSearch(params).get_dict().get('organic_results', [])
         for res in results:
             for field in ('link', 'url', 'unified_url', 'displayed_link'):
-                u = res.get(field, '')
-                if 'ballotpedia.org' in u:
-                    return u
+                candidate_url = res.get(field)
+                if candidate_url and 'ballotpedia.org' in candidate_url:
+                    return candidate_url
     return None
 
 
-def find_campaign_site(bp_url, name=None):
-    if not bp_url:
+def find_campaign_site(candidate_bp_url, candidate_name=None):
+    """
+    Extracts the candidate's official campaign site by:
+      1) Infobox 'Contact' section: first external link (non-gov)
+      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov)
+      3) Fallback: external links preferring ones containing the candidate slug (non-gov)
+    """
+    if not candidate_bp_url:
         return None
     try:
-        r = requests.get(bp_url, headers=REQUEST_HEADERS, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, 'html.parser')
+        resp = requests.get(candidate_bp_url, headers=REQUEST_HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
         infobox = soup.find('table', class_='infobox')
         if infobox:
-            for tr in infobox.find_all('tr'):
-                th = tr.find('th')
-                td = tr.find('td')
+            # 1) Contact row
+            for row in infobox.find_all('tr'):
+                th = row.find('th')
+                td = row.find('td')
                 if th and td and 'contact' in th.get_text(strip=True).lower():
                     for a in td.find_all('a', href=True):
                         href = a['href']
-                        hl = href.lower()
-                        if href.startswith('http') and not any(dom in hl for dom in EXCLUDE_DOMAINS):
+                        if (href.startswith('http') and
+                                'mailto:' not in href and
+                                'ballotpedia' not in href.lower() and
+                                '.gov' not in href.lower()):
                             return href
-        # Fallback
-        links = [a['href'] for a in soup.find_all('a', href=True)]
-        external = [l for l in links if l.startswith('http') and not any(dom in l.lower() for dom in EXCLUDE_DOMAINS)]
-        if name:
-            slug = name.replace(' ', '_').lower()
-            for l in external:
-                if slug in l.lower():
-                    return l
-        return external[0] if external else None
+            # 2) Specific labels
+            for row in infobox.find_all('tr'):
+                th = row.find('th')
+                td = row.find('td')
+                if th and td:
+                    label = th.get_text(strip=True).lower()
+                    if any(key in label for key in ('campaign website', 'campaign site', 'official website')):
+                        link_tag = td.find('a', href=True)
+                        href = link_tag['href'] if link_tag else ''
+                        if href.startswith('http') and '.gov' not in href.lower():
+                            return href
+        # 3) Fallback: any external, non-gov, non-social link
+        all_links = [a['href'] for a in soup.find_all('a', href=True)]
+        external = [l for l in all_links
+                    if (l.startswith('http') and
+                        'ballotpedia' not in l.lower() and
+                        not l.lower().startswith('mailto:') and
+                        not any(dom in l for dom in SOCIAL_DOMAINS) and
+                        '.gov' not in l.lower())]
+        if candidate_name:
+            slug = candidate_name.replace(' ', '_').lower()
+            for link in external:
+                if slug in link.lower():
+                    return link
+        if external:
+            return external[0]
     except requests.RequestException:
-        return None
+        pass
+    return None
 
 
-def extract_social_links(site_url):
-    if not site_url:
+def extract_social_links(url):
+    """Scrapes URL, returns social media links filtering out Ballotpedia hosts and .gov."""
+    if not url:
         return {}
     try:
-        r = requests.get(site_url, headers=REQUEST_HEADERS, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, 'html.parser')
+        resp = requests.get(url, headers=REQUEST_HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'html.parser')
         links = [a['href'] for a in soup.find_all('a', href=True)]
         social_links = {}
-        for name, pat in SOCIAL_PATTERNS.items():
-            for l in links:
-                ll = l.lower()
-                if re.search(pat, l, re.IGNORECASE) and not any(dom in ll for dom in EXCLUDE_DOMAINS):
-                    # normalize relative URLs
-                    social_links[name] = urljoin(site_url, l)
+        for name, pattern in SOCIAL_PATTERNS.items():
+            for link in links:
+                if 'ballotpedia' in link.lower() or '.gov' in link.lower():
+                    continue
+                if re.search(pattern, link, re.IGNORECASE):
+                    social_links[name] = link
                     break
         return social_links
     except requests.RequestException:
         return {}
 
 
-def get_candidate_socials(name):
-    bp_url = find_ballotpedia_url(name)
-    campaign_url = find_campaign_site(bp_url, name) if bp_url else None
-    socials_bp = extract_social_links(bp_url) if bp_url else {}
-    socials_camp = extract_social_links(campaign_url) if campaign_url else {}
+def get_candidate_socials(candidate_name):
+    """Returns {'campaign_site': url_or_None, 'social_links': {...}}"""
+    bp_url = find_ballotpedia_url(candidate_name)
+    if not bp_url:
+        st.error(f"❌ No Ballotpedia page found for {candidate_name}")
+        return {'campaign_site': None, 'social_links': {}}
+
+    campaign_site = find_campaign_site(bp_url, candidate_name)
+    socials_bp = extract_social_links(bp_url)
+    socials_cam = extract_social_links(campaign_site) if campaign_site else {}
     merged = {}
     for platform in SOCIAL_PATTERNS:
-        if platform in socials_camp:
-            merged[platform] = socials_camp[platform]
+        if platform in socials_cam:
+            merged[platform] = socials_cam[platform]
         elif platform in socials_bp:
             merged[platform] = socials_bp[platform]
-    return bp_url, campaign_url, merged
+
+    return {'campaign_site': campaign_site, 'social_links': merged}
 
 # Streamlit UI
-st.title("Ballotpedia Campaign & Social Scraper")
-name = st.text_input("Candidate Name", "Patrick Hope")
-if st.button("Lookup"):
-    bp_url, camp_url, socials = get_candidate_socials(name)
-    if bp_url:
-        st.markdown(f"**Ballotpedia URL:** [Link]({bp_url})")
+st.title("Ballotpedia Social Scraper")
+candidate = st.text_input('Candidate Name', '')
+if st.button('Lookup'):
+    result = get_candidate_socials(candidate)
+    camp = result['campaign_site']
+    socials = result['social_links']
+    if camp:
+        st.markdown(f"**Campaign Site:** [Link]({camp})")
     else:
-        st.warning("Ballotpedia page not found.")
-    if camp_url:
-        st.markdown(f"**Campaign Site:** [Link]({camp_url})")
-    else:
-        st.warning("Campaign site not found.")
+        st.warning('Campaign site not found.')
     if socials:
-        st.subheader("Social Media Links")
-        for k, v in socials.items():
-            st.markdown(f"- **{k}:** [Link]({v})")
+        st.subheader('Social Media Links')
+        for plat, link in socials.items():
+            st.write(f"- **{plat}:** {link}")
     else:
-        st.info("No social media links found.")
+        st.info('No social media links found.')
