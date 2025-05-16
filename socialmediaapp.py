@@ -63,64 +63,38 @@ def find_ballotpedia_url(candidate_name, max_pages=2):
 
 
 def find_campaign_site(candidate_bp_url, candidate_name=None):
-    """
-    Only attempts extraction if the Ballotpedia page mentions 'campaign site' or 'campaign website'.
-    Then uses:
-      1) Infobox 'Contact' row links
-      2) Infobox labels 'campaign website', 'campaign site', 'official website'
-      3) Page-wide anchor text scan for 'campaign site' keywords
-    Excludes .gov, Ballotpedia, and configured domains.
-    """
     if not candidate_bp_url:
         return None
     try:
         resp = requests.get(candidate_bp_url, headers=REQUEST_HEADERS, timeout=10)
         resp.raise_for_status()
         page_text = BeautifulSoup(resp.text, 'html.parser').get_text(separator=' ').lower()
-        # Abort if no campaign site mention
         if 'campaign site' not in page_text and 'campaign website' not in page_text:
             return None
         soup = BeautifulSoup(resp.text, 'html.parser')
-        # 1) Infobox contact row
         infobox = soup.find('table', class_='infobox')
         if infobox:
             for row in infobox.find_all('tr'):
-                th = row.find('th')
-                td = row.find('td')
+                th = row.find('th'); td = row.find('td')
                 if th and td and 'contact' in th.get_text(strip=True).lower():
                     for a in td.find_all('a', href=True):
-                        href = a['href']
-                        l = href.lower()
-                        if href.startswith('http') and \
-                           'mailto:' not in l and \
-                           'ballotpedia' not in l and \
-                           '.gov' not in l and \
-                           not any(ex in l for ex in CAMPAIGN_EXCLUDE):
+                        href = a['href']; l = href.lower()
+                        if href.startswith('http') and not any(x in l for x in ['mailto:','ballotpedia','.gov']+CAMPAIGN_EXCLUDE):
                             return href
-        # 2) Infobox labels
-        if infobox:
             for row in infobox.find_all('tr'):
-                th = row.find('th')
-                td = row.find('td')
+                th = row.find('th'); td = row.find('td')
                 if th and td:
-                    label = th.get_text(strip=True).lower()
-                    if any(k in label for k in ('campaign website','campaign site','official website')):
+                    lbl = th.get_text(strip=True).lower()
+                    if any(key in lbl for key in ('campaign website','campaign site','official website')):
                         a = td.find('a', href=True)
                         if a:
                             href = a['href']; l = href.lower()
-                            if href.startswith('http') and \
-                               '.gov' not in l and \
-                               not any(ex in l for ex in CAMPAIGN_EXCLUDE):
+                            if href.startswith('http') and not any(x in l for x in ['.gov']+CAMPAIGN_EXCLUDE):
                                 return href
-        # 3) Page-wide anchor text
         for a in soup.find_all('a', href=True):
             text = a.get_text(strip=True).lower()
             href = a['href']; l = href.lower()
-            if ('campaign site' in text or 'campaign website' in text) and \
-               href.startswith('http') and \
-               'ballotpedia' not in l and \
-               '.gov' not in l and \
-               not any(ex in l for ex in CAMPAIGN_EXCLUDE):
+            if any(k in text for k in ('campaign site','campaign website')) and href.startswith('http') and not any(x in l for x in ['ballotpedia','.gov']+CAMPAIGN_EXCLUDE):
                 return href
     except requests.RequestException:
         pass
@@ -139,7 +113,7 @@ def extract_social_links(url):
         for name, pat in SOCIAL_PATTERNS.items():
             for lnk in links:
                 l = lnk.lower()
-                if 'ballotpedia' in l or '.gov' in l:
+                if any(x in l for x in ['ballotpedia','.gov']):
                     continue
                 if re.search(pat, lnk, re.IGNORECASE):
                     socials[name] = lnk
@@ -153,29 +127,41 @@ def get_candidate_socials(candidate_name):
     bp = find_ballotpedia_url(candidate_name)
     if not bp:
         st.error(f"❌ No Ballotpedia page found for {candidate_name}")
-        return {'ballotpedia_url':None,'campaign_site':None,'social_links':{}}
+        return
     camp = find_campaign_site(bp, candidate_name)
     socials_bp = extract_social_links(bp)
     socials_camp = extract_social_links(camp) if camp else {}
-    merged = {**socials_bp, **socials_camp}  # prioritize campaign site
-    return {'ballotpedia_url':bp,'campaign_site':camp,'social_links':merged}
+    return bp, camp, {**socials_bp, **socials_camp}
 
 # Streamlit UI
 st.title("Ballotpedia Social Scraper")
-candidate = st.text_input('Candidate Name')
-if st.button('Lookup'):
-    result = get_candidate_socials(candidate)
-    bp = result['ballotpedia_url']; camp = result['campaign_site']; socials = result['social_links']
-    if bp: st.markdown(f"**Ballotpedia Page:** [Link]({bp})")
-    else: st.warning('Ballotpedia page not found.')
-    if camp: st.markdown(f"**Campaign Site:** [Link]({camp})")
-    else:
-        st.warning('Campaign site not found.')
-        manual = st.text_input('Manual campaign site URL')
-        if manual:
-            camp = manual; st.markdown(f"**Campaign Site:** [Link]({camp})")
-            socials = extract_social_links(camp)
-    if socials:
-        st.subheader('Social Media Links')
-        for p,l in socials.items(): st.write(f"- **{p}:** {l}")
-    else: st.info('No social media links found.')
+name = st.text_input('Candidate Name')
+if 'bp' not in st.session_state:
+    st.session_state['bp'] = None
+    st.session_state['camp'] = None
+    st.session_state['socials'] = {}
+
+if st.button('Lookup') and name:
+    st.session_state['bp'], st.session_state['camp'], st.session_state['socials'] = get_candidate_socials(name)
+
+if st.session_state['bp']:
+    st.markdown(f"**Ballotpedia Page:** [Link]({st.session_state['bp']})")
+else:
+    st.warning('Ballotpedia page not found.')
+
+if st.session_state['camp']:
+    st.markdown(f"**Campaign Site:** [Link]({st.session_state['camp']})")
+else:
+    st.warning('Campaign site not found.')
+    manual = st.text_input('Manual campaign site URL')
+    if manual:
+        st.session_state['camp'] = manual
+        st.session_state['socials'] = extract_social_links(manual)
+        st.markdown(f"**Campaign Site:** [Link]({manual})")
+
+if st.session_state['socials']:
+    st.subheader('Social Media Links')
+    for p, link in st.session_state['socials'].items():
+        st.write(f"- **{p}:** {link}")
+else:
+    st.info('No social media links found.')
