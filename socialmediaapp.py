@@ -23,6 +23,8 @@ SOCIAL_DOMAINS = [
     'twitter.com', 'x.com', 'facebook.com', 'instagram.com',
     'youtube.com', 'tiktok.com', 'linkedin.com', 'threads.net', 'bsky.app'
 ]
+# Additional domains to exclude for campaign detection
+CAMPAIGN_EXCLUDE = ['jotform.com']
 
 # Common request headers to mimic a browser
 REQUEST_HEADERS = {
@@ -71,9 +73,9 @@ def find_ballotpedia_url(candidate_name, max_pages=2):
 def find_campaign_site(candidate_bp_url, candidate_name=None):
     """
     Extracts the candidate's official campaign site by:
-      1) Infobox 'Contact' section: first external link (non-gov)
-      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov)
-      3) Fallback: external links preferring ones containing the candidate slug (non-gov)
+      1) Infobox 'Contact' section: first external link (non-gov, non-jotform)
+      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov, non-jotform)
+      3) Fallback: external links preferring ones containing the candidate slug (non-gov, non-jotform)
     """
     if not candidate_bp_url:
         return None
@@ -90,10 +92,12 @@ def find_campaign_site(candidate_bp_url, candidate_name=None):
                 if th and td and 'contact' in th.get_text(strip=True).lower():
                     for a in td.find_all('a', href=True):
                         href = a['href']
+                        href_l = href.lower()
                         if (href.startswith('http') and
-                                'mailto:' not in href and
-                                'ballotpedia' not in href.lower() and
-                                '.gov' not in href.lower()):
+                                'mailto:' not in href_l and
+                                'ballotpedia' not in href_l and
+                                '.gov' not in href_l and
+                                not any(ex in href_l for ex in CAMPAIGN_EXCLUDE)):
                             return href
             # 2) Specific labels
             for row in infobox.find_all('tr'):
@@ -104,16 +108,18 @@ def find_campaign_site(candidate_bp_url, candidate_name=None):
                     if any(key in label for key in ('campaign website', 'campaign site', 'official website')):
                         link_tag = td.find('a', href=True)
                         href = link_tag['href'] if link_tag else ''
-                        if href.startswith('http') and '.gov' not in href.lower():
+                        href_l = href.lower()
+                        if href.startswith('http') and '.gov' not in href_l and not any(ex in href_l for ex in CAMPAIGN_EXCLUDE):
                             return href
-        # 3) Fallback: any external, non-gov, non-social link
+        # 3) Fallback: any external, non-gov, non-social, non-jotform link
         all_links = [a['href'] for a in soup.find_all('a', href=True)]
         external = [l for l in all_links
                     if (l.startswith('http') and
                         'ballotpedia' not in l.lower() and
                         not l.lower().startswith('mailto:') and
                         not any(dom in l for dom in SOCIAL_DOMAINS) and
-                        '.gov' not in l.lower())]
+                        '.gov' not in l.lower() and
+                        not any(ex in l.lower() for ex in CAMPAIGN_EXCLUDE))]
         if candidate_name:
             slug = candidate_name.replace(' ', '_').lower()
             for link in external:
@@ -138,7 +144,8 @@ def extract_social_links(url):
         social_links = {}
         for name, pattern in SOCIAL_PATTERNS.items():
             for link in links:
-                if 'ballotpedia' in link.lower() or '.gov' in link.lower():
+                l_l = link.lower()
+                if 'ballotpedia' in l_l or '.gov' in l_l:
                     continue
                 if re.search(pattern, link, re.IGNORECASE):
                     social_links[name] = link
@@ -190,7 +197,6 @@ if st.button('Lookup'):
         if manual:
             camp = manual
             st.markdown(f"**Campaign Site:** [Link]({camp})")
-            # Re-extract socials from manual input
             socials = extract_social_links(camp)
 
     if socials:
