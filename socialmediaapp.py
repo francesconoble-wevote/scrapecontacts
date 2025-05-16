@@ -72,17 +72,24 @@ def find_ballotpedia_url(candidate_name, max_pages=2):
 
 def find_campaign_site(candidate_bp_url, candidate_name=None):
     """
-    Extracts the candidate's official campaign site by:
-      1) Infobox 'Contact' section: first external link (non-gov, non-jotform, non-googledocs)
-      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov, non-jotform, non-googledocs)
-      3) Fallback: external links preferring ones containing the candidate slug (non-gov, non-jotform, non-googledocs)
+    Checks for 'campaign site' text on Ballotpedia page before scraping.
+    If present, extracts the official campaign site by:
+      1) Infobox 'Contact' section: first external link (non-gov, non-excluded)
+      2) Infobox labels: 'campaign website', 'campaign site', 'official website'
+      3) Fallback: other external links preferring candidate slug
     """
     if not candidate_bp_url:
         return None
     try:
         resp = requests.get(candidate_bp_url, headers=REQUEST_HEADERS, timeout=10)
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'html.parser')
+        html = resp.text
+        # Only proceed if page mentions 'campaign site' or 'campaign website'
+        page_text = BeautifulSoup(html, 'html.parser').get_text(separator=' ').lower()
+        if 'campaign site' not in page_text and 'campaign website' not in page_text:
+            return None
+
+        soup = BeautifulSoup(html, 'html.parser')
         infobox = soup.find('table', class_='infobox')
         if infobox:
             # 1) Contact row
@@ -113,7 +120,7 @@ def find_campaign_site(candidate_bp_url, candidate_name=None):
                                 '.gov' not in href_l and
                                 not any(ex in href_l for ex in CAMPAIGN_EXCLUDE)):
                             return href
-        # 3) Fallback: any external, non-gov, non-social, non-jotform, non-googledocs link
+        # 3) Fallback: any other external, non-gov, non-social, non-excluded link
         all_links = [a['href'] for a in soup.find_all('a', href=True)]
         external = [l for l in all_links
                     if (l.startswith('http') and
