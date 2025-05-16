@@ -185,6 +185,13 @@ if st.button('Lookup'):
         st.markdown(f"**Campaign Site:** [Link]({camp})")
     else:
         st.warning('Campaign site not found.')
+        # Prompt for manual campaign URL
+        manual = st.text_input('Enter campaign site URL manually')
+        if manual:
+            camp = manual
+            st.markdown(f"**Campaign Site:** [Link]({camp})")
+            # Re-extract socials from manual input
+            socials = extract_social_links(camp)
 
     if socials:
         st.subheader('Social Media Links')
