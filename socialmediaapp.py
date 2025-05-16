@@ -24,7 +24,7 @@ SOCIAL_DOMAINS = [
     'youtube.com', 'tiktok.com', 'linkedin.com', 'threads.net', 'bsky.app'
 ]
 # Additional domains to exclude for campaign detection
-CAMPAIGN_EXCLUDE = ['jotform.com']
+CAMPAIGN_EXCLUDE = ['jotform.com', 'docs.google.com']
 
 # Common request headers to mimic a browser
 REQUEST_HEADERS = {
@@ -73,9 +73,9 @@ def find_ballotpedia_url(candidate_name, max_pages=2):
 def find_campaign_site(candidate_bp_url, candidate_name=None):
     """
     Extracts the candidate's official campaign site by:
-      1) Infobox 'Contact' section: first external link (non-gov, non-jotform)
-      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov, non-jotform)
-      3) Fallback: external links preferring ones containing the candidate slug (non-gov, non-jotform)
+      1) Infobox 'Contact' section: first external link (non-gov, non-jotform, non-googledocs)
+      2) Infobox labels: 'campaign website', 'campaign site', 'official website' (non-gov, non-jotform, non-googledocs)
+      3) Fallback: external links preferring ones containing the candidate slug (non-gov, non-jotform, non-googledocs)
     """
     if not candidate_bp_url:
         return None
@@ -109,9 +109,11 @@ def find_campaign_site(candidate_bp_url, candidate_name=None):
                         link_tag = td.find('a', href=True)
                         href = link_tag['href'] if link_tag else ''
                         href_l = href.lower()
-                        if href.startswith('http') and '.gov' not in href_l and not any(ex in href_l for ex in CAMPAIGN_EXCLUDE):
+                        if (href.startswith('http') and
+                                '.gov' not in href_l and
+                                not any(ex in href_l for ex in CAMPAIGN_EXCLUDE)):
                             return href
-        # 3) Fallback: any external, non-gov, non-social, non-jotform link
+        # 3) Fallback: any external, non-gov, non-social, non-jotform, non-googledocs link
         all_links = [a['href'] for a in soup.find_all('a', href=True)]
         external = [l for l in all_links
                     if (l.startswith('http') and
