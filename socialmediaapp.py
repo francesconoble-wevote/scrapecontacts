@@ -149,11 +149,11 @@ def extract_social_links(url):
 
 
 def get_candidate_socials(candidate_name):
-    """Returns {'campaign_site': url_or_None, 'social_links': {...}}"""
+    """Returns {'ballotpedia_url': url_or_None, 'campaign_site': url_or_None, 'social_links': {...}}"""
     bp_url = find_ballotpedia_url(candidate_name)
     if not bp_url:
         st.error(f"❌ No Ballotpedia page found for {candidate_name}")
-        return {'campaign_site': None, 'social_links': {}}
+        return {'ballotpedia_url': None, 'campaign_site': None, 'social_links': {}}
 
     campaign_site = find_campaign_site(bp_url, candidate_name)
     socials_bp = extract_social_links(bp_url)
@@ -165,19 +165,27 @@ def get_candidate_socials(candidate_name):
         elif platform in socials_bp:
             merged[platform] = socials_bp[platform]
 
-    return {'campaign_site': campaign_site, 'social_links': merged}
+    return {'ballotpedia_url': bp_url, 'campaign_site': campaign_site, 'social_links': merged}
 
 # Streamlit UI
 st.title("Ballotpedia Social Scraper")
 candidate = st.text_input('Candidate Name', '')
 if st.button('Lookup'):
     result = get_candidate_socials(candidate)
+    bp = result['ballotpedia_url']
     camp = result['campaign_site']
     socials = result['social_links']
+
+    if bp:
+        st.markdown(f"**Ballotpedia Page:** [Link]({bp})")
+    else:
+        st.warning('Ballotpedia page not found.')
+
     if camp:
         st.markdown(f"**Campaign Site:** [Link]({camp})")
     else:
         st.warning('Campaign site not found.')
+
     if socials:
         st.subheader('Social Media Links')
         for plat, link in socials.items():
