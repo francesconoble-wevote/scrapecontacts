@@ -36,7 +36,7 @@ def find_ballotpedia_url(name):
             return url
     except requests.RequestException:
         pass
-    # fallback SerpAPI logic omitted for brevity
+    # You can add fallback SerpAPI search here if needed
     return None
 
 
@@ -48,10 +48,13 @@ def find_campaign_site(bp_url):
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
         text = soup.get_text(separator=' ').lower()
+        # Only proceed if ever mentions campaign site
         if 'campaign site' not in text and 'campaign website' not in text:
             return None
-        # infobox and anchor-text detection omitted for brevity
-        return None  # placeholder
+        # Infobox extraction logic here...
+        # Anchor text scan here...
+        # (omitted for brevity, assume same as before)
+        return None  # placeholder for detection logic
     except:
         return None
 
@@ -65,11 +68,12 @@ def extract_social_links(url):
         links = [a['href'] for a in soup.find_all('a', href=True)]
         socials = {}
         for name, pat in SOCIAL_PATTERNS.items():
-            for l in links:
-                if any(ex in l.lower() for ex in EXCLUDE_DOMAINS):
+            for link in links:
+                l = link.lower()
+                if any(ex in l for ex in EXCLUDE_DOMAINS):
                     continue
-                if re.search(pat, l, re.IGNORECASE):
-                    socials[name] = l
+                if re.search(pat, link, re.IGNORECASE):
+                    socials[name] = link
                     break
         return socials
     except:
@@ -83,45 +87,59 @@ def get_candidate_socials(name):
     socials_camp = extract_social_links(camp) if camp else {}
     return bp, camp, socials_bp, socials_camp
 
-
 # Streamlit UI
 st.title("Ballotpedia Social Scraper")
 name = st.text_input('Candidate Name')
-# initialize state
-for k in ('bp', 'camp', 'socials_bp', 'socials_camp'):
-    if k not in st.session_state:
-        st.session_state[k] = None if k != 'socials_bp' and k != 'socials_camp' else {}
+lookup = st.button('Lookup')
 
-if st.button('Lookup') and name:
+# Initialize session state on first render
+if 'bp' not in st.session_state:
+    st.session_state.bp = None
+    st.session_state.camp = None
+    st.session_state.socials_bp = {}
+    st.session_state.socials_camp = {}
+    st.session_state.lookup_done = False
+    st.session_state.manual = None
+
+# Perform lookup
+if lookup and name:
     bp, camp, sbp, scap = get_candidate_socials(name)
     st.session_state.bp = bp
     st.session_state.camp = camp
     st.session_state.socials_bp = sbp
     st.session_state.socials_camp = scap
+    st.session_state.lookup_done = True
+    st.session_state.manual = None
 
-# Display Ballotpedia URL
-if st.session_state.bp:
-    st.markdown(f"**Ballotpedia Page:** [Link]({st.session_state.bp})")
-else:
-    st.warning('Ballotpedia page not found.')
+# Only show results after lookup
+if st.session_state.lookup_done:
+    # Ballotpedia URL
+    if st.session_state.bp:
+        st.markdown(f"**Ballotpedia Page:** [Link]({st.session_state.bp})")
+    else:
+        st.error('Ballotpedia page not found.')
 
-# Campaign site logic
-if st.session_state.bp:
-    if st.session_state.camp:
-        st.markdown(f"**Campaign Site:** [Link]({st.session_state.camp})")
-        # both bp and camp checked, now show socials
+    # Campaign site
+    if st.session_state.bp:
+        if st.session_state.camp:
+            st.markdown(f"**Campaign Site:** [Link]({st.session_state.camp})")
+        else:
+            st.warning('Campaign site not found on Ballotpedia.')
+            # Show manual input only when needed
+            manual = st.text_input('Enter campaign site URL manually')
+            if manual:
+                st.session_state.manual = manual
+                st.session_state.camp = manual
+                st.session_state.socials_camp = extract_social_links(manual)
+                st.experimental_rerun()
+
+    # After both bp and camp (auto or manual)
+    if st.session_state.bp and st.session_state.camp:
+        # Merge and dedupe
         merged = {**st.session_state.socials_bp, **st.session_state.socials_camp}
         if merged:
             st.subheader('Social Media Links')
-            for p, link in merged.items():
-                st.write(f"- **{p}:** {link}")
+            for plat, lnk in merged.items():
+                st.write(f"- **{plat}:** {lnk}")
         else:
             st.info('No social media links found.')
-    else:
-        st.warning('Campaign site not found.')
-        manual = st.text_input('Manual campaign site URL')
-        if manual:
-            st.session_state.camp = manual
-            st.session_state.socials_camp = extract_social_links(manual)
-            # after manual input, trigger UI rerun
-            st.experimental_rerun()
