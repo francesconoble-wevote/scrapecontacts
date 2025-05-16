@@ -4,8 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
 import streamlit as st
+from urllib.parse import urljoin
 
-# Regex patterns for social media
+# Social media regex patterns
 SOCIAL_PATTERNS = {
     'Twitter': r'(twitter\.com|x\.com)/',
     'Facebook': r'facebook\.com/',
@@ -16,9 +17,11 @@ SOCIAL_PATTERNS = {
     'Threads': r'threads\.net/',
     'Bluesky': r'bsky\.app/',
 }
-# Domains to exclude
+
+# Domains to exclude when filtering
 EXCLUDE_DOMAINS = ['ballotpedia', '.gov']
-# Request headers
+
+# Request headers to mimic a browser
 REQUEST_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -27,7 +30,6 @@ REQUEST_HEADERS = {
     )
 }
 
-# Functions
 
 def find_ballotpedia_url(name, max_pages=2):
     slug = name.replace(' ', '_')
@@ -42,13 +44,13 @@ def find_ballotpedia_url(name, max_pages=2):
     for page in range(max_pages):
         params = {
             'engine': 'google', 'q': query,
-            'start': page*10, 'num': 10,
+            'start': page * 10, 'num': 10,
             'gl': 'us', 'hl': 'en',
             'api_key': os.getenv('SERPAPI_API_KEY')
         }
         results = GoogleSearch(params).get_dict().get('organic_results', [])
         for res in results:
-            for field in ('link','url','displayed_link'):
+            for field in ('link', 'url', 'unified_url', 'displayed_link'):
                 u = res.get(field, '')
                 if 'ballotpedia.org' in u:
                     return u
@@ -56,11 +58,12 @@ def find_ballotpedia_url(name, max_pages=2):
 
 
 def find_campaign_site(bp_url, name=None):
+    if not bp_url:
+        return None
     try:
         r = requests.get(bp_url, headers=REQUEST_HEADERS, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
-        # Infobox contact
         infobox = soup.find('table', class_='infobox')
         if infobox:
             for tr in infobox.find_all('tr'):
@@ -69,47 +72,59 @@ def find_campaign_site(bp_url, name=None):
                 if th and td and 'contact' in th.get_text(strip=True).lower():
                     for a in td.find_all('a', href=True):
                         href = a['href']
-                        if href.startswith('http') and not any(dom in href for dom in EXCLUDE_DOMAINS):
+                        hl = href.lower()
+                        if href.startswith('http') and not any(dom in hl for dom in EXCLUDE_DOMAINS):
                             return href
         # Fallback
         links = [a['href'] for a in soup.find_all('a', href=True)]
-        external = [l for l in links if l.startswith('http') and not any(dom in l for dom in EXCLUDE_DOMAINS)]
+        external = [l for l in links if l.startswith('http') and not any(dom in l.lower() for dom in EXCLUDE_DOMAINS)]
         if name:
             slug = name.replace(' ', '_').lower()
             for l in external:
                 if slug in l.lower():
                     return l
         return external[0] if external else None
-    except:
+    except requests.RequestException:
         return None
 
 
 def extract_social_links(site_url):
+    if not site_url:
+        return {}
     try:
         r = requests.get(site_url, headers=REQUEST_HEADERS, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
         links = [a['href'] for a in soup.find_all('a', href=True)]
-        socials = {}
+        social_links = {}
         for name, pat in SOCIAL_PATTERNS.items():
             for l in links:
-                if re.search(pat, l, re.IGNORECASE) and not any(dom in l for dom in EXCLUDE_DOMAINS):
-                    socials[name] = l
+                ll = l.lower()
+                if re.search(pat, l, re.IGNORECASE) and not any(dom in ll for dom in EXCLUDE_DOMAINS):
+                    # normalize relative URLs
+                    social_links[name] = urljoin(site_url, l)
                     break
-        return socials
-    except:
+        return social_links
+    except requests.RequestException:
         return {}
 
 
 def get_candidate_socials(name):
-    bp = find_ballotpedia_url(name)
-    campaign = find_campaign_site(bp, name) if bp else None
-    socials = extract_social_links(campaign) if campaign else {}
-    return bp, campaign, socials
+    bp_url = find_ballotpedia_url(name)
+    campaign_url = find_campaign_site(bp_url, name) if bp_url else None
+    socials_bp = extract_social_links(bp_url) if bp_url else {}
+    socials_camp = extract_social_links(campaign_url) if campaign_url else {}
+    merged = {}
+    for platform in SOCIAL_PATTERNS:
+        if platform in socials_camp:
+            merged[platform] = socials_camp[platform]
+        elif platform in socials_bp:
+            merged[platform] = socials_bp[platform]
+    return bp_url, campaign_url, merged
 
 # Streamlit UI
 st.title("Ballotpedia Campaign & Social Scraper")
-name = st.text_input("Candidate Name", "")
+name = st.text_input("Candidate Name", "Patrick Hope")
 if st.button("Lookup"):
     bp_url, camp_url, socials = get_candidate_socials(name)
     if bp_url:
