@@ -115,7 +115,7 @@ def extract_infobox_socials(bp_url):
 
 def extract_social_links(url):
     """Scrape raw <a> tags, but only keep true, direct links—
-       no share widgets and no links mentioning 'ballotpedia'."""
+       no share widgets and no links mentioning 'ballotpedia' or any EXCLUDE_DOMAINS."""
     socials = {}
     if not url:
         return socials
@@ -128,20 +128,22 @@ def extract_social_links(url):
             for a in soup.find_all('a', href=re.compile(pat, re.IGNORECASE)):
                 href = a['href']
                 lhref = href.lower()
-                # skip anything that mentions 'ballotpedia'
-                if 'ballotpedia' in lhref:
+
+                # skip anything that mentions 'ballotpedia' or any excluded substring (e.g. wix)
+                if 'ballotpedia' in lhref or any(ex in lhref for ex in EXCLUDE_DOMAINS):
                     continue
+
                 # parse domain
                 parsed = urlparse(href)
                 domain = parsed.netloc.lower().split(':')[0]
-                # skip generic excludes
-                if any(ex in domain for ex in EXCLUDE_DOMAINS):
-                    continue
+
                 # only accept official social domains
                 if domain in ALLOWED_SOCIAL_DOMAINS.get(platform, set()):
                     socials[platform] = href
                     break
+
         return socials
+
     except requests.RequestException:
         return {}
 
