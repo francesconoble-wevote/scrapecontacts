@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
 import streamlit as st
@@ -15,6 +16,18 @@ SOCIAL_PATTERNS = {
     'Linkedin': r'linkedin\.com/',
     'Threads': r'threads\.net/',
     'Bluesky': r'bsky\.app/',
+}
+
+# Allowed domains for each platform
+ALLOWED_SOCIAL_DOMAINS = {
+    'Twitter':  {'twitter.com', 'www.twitter.com', 'x.com', 'www.x.com'},
+    'Facebook': {'facebook.com', 'www.facebook.com'},
+    'Instagram':{'instagram.com', 'www.instagram.com'},
+    'Youtube':  {'youtube.com', 'www.youtube.com', 'youtu.be'},
+    'Tiktok':   {'tiktok.com', 'www.tiktok.com'},
+    'Linkedin': {'linkedin.com', 'www.linkedin.com'},
+    'Threads':  {'threads.net', 'www.threads.net'},
+    'Bluesky':  {'bsky.app', 'www.bsky.app'},
 }
 
 # Domains to exclude when scraping social links
@@ -36,10 +49,12 @@ def find_ballotpedia_url(name):
             return url
     except requests.RequestException:
         pass
+    # Fallback via SerpAPI could go here
     return None
 
 
 def find_campaign_site(bp_url):
+    """Find the first external link on the Ballotpedia page that isn't BP or excluded."""
     if not bp_url:
         return None
     try:
@@ -51,6 +66,7 @@ def find_campaign_site(bp_url):
             lhref = href.lower()
             if not href.startswith('http'):
                 continue
+            # skip Ballotpedia itself and common excludes
             if 'ballotpedia' in lhref or any(ex in lhref for ex in CAMPAIGN_EXCLUDE):
                 continue
             return href
@@ -60,6 +76,7 @@ def find_campaign_site(bp_url):
 
 
 def extract_infobox_socials(bp_url):
+    """Grab the social links from Ballotpedia’s infobox table."""
     socials = {}
     if not bp_url:
         return socials
@@ -81,10 +98,13 @@ def extract_infobox_socials(bp_url):
             lhref = href.lower()
             if not href.startswith('http'):
                 continue
+            # match by label or by pattern
             for platform, pat in SOCIAL_PATTERNS.items():
                 if platform.lower() in label or re.search(pat, href, re.IGNORECASE):
+                    # skip share-widget redirects
                     if 'special:redirect/media' in lhref or 'sharer.php' in lhref:
                         continue
+                    # skip generic excludes
                     if any(ex in lhref for ex in EXCLUDE_DOMAINS):
                         continue
                     socials[platform] = href
@@ -94,6 +114,8 @@ def extract_infobox_socials(bp_url):
 
 
 def extract_social_links(url):
+    """Scrape raw <a> tags, but only keep true, direct links—
+       no share widgets and no links mentioning 'ballotpedia'."""
     socials = {}
     if not url:
         return socials
@@ -101,14 +123,24 @@ def extract_social_links(url):
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
+
         for platform, pat in SOCIAL_PATTERNS.items():
             for a in soup.find_all('a', href=re.compile(pat, re.IGNORECASE)):
                 href = a['href']
                 lhref = href.lower()
-                if any(ex in lhref for ex in EXCLUDE_DOMAINS):
+                # skip anything that mentions 'ballotpedia'
+                if 'ballotpedia' in lhref:
                     continue
-                socials[platform] = href
-                break
+                # parse domain
+                parsed = urlparse(href)
+                domain = parsed.netloc.lower().split(':')[0]
+                # skip generic excludes
+                if any(ex in domain for ex in EXCLUDE_DOMAINS):
+                    continue
+                # only accept official social domains
+                if domain in ALLOWED_SOCIAL_DOMAINS.get(platform, set()):
+                    socials[platform] = href
+                    break
         return socials
     except requests.RequestException:
         return {}
@@ -117,9 +149,11 @@ def extract_social_links(url):
 def get_candidate_socials(name):
     bp = find_ballotpedia_url(name)
     camp = find_campaign_site(bp)
+    # Ballotpedia socials = infobox + body
     sb_infobox = extract_infobox_socials(bp)
     sb_body = extract_social_links(bp)
     socials_bp = {**sb_infobox, **sb_body}
+    # campaign-site socials = body only
     socials_camp = extract_social_links(camp) if camp else {}
     return bp, camp, socials_bp, socials_camp
 
@@ -140,7 +174,6 @@ if 'lookup_done' not in st.session_state:
     st.session_state.socials_camp = {}
     st.session_state.camp_confirmed = None
     st.session_state.manual = ''
-    st.session_state.manual_lookup = False
 
 # Perform lookup
 if lookup and name:
@@ -152,7 +185,6 @@ if lookup and name:
     st.session_state.lookup_done = True
     st.session_state.camp_confirmed = None
     st.session_state.manual = ''
-    st.session_state.manual_lookup = False
 
 # After lookup, show Ballotpedia and campaign logic
 if st.session_state.lookup_done:
@@ -187,16 +219,12 @@ if st.session_state.lookup_done:
         if st.session_state.camp_confirmed is False or (st.session_state.camp is None):
             if st.session_state.camp_confirmed is False:
                 st.warning("Please provide the correct campaign site URL:")
-            manual = st.text_input(
-                'Manual Campaign Site URL',
-                value=st.session_state.manual,
-                key="manual_site"
-            )
+            manual = st.text_input('Manual Campaign Site URL', value=st.session_state.manual)
             if st.button("Lookup Manual Campaign Site"):
                 st.session_state.manual = manual
                 st.session_state.camp = manual
                 st.session_state.socials_camp = extract_social_links(manual)
-                st.session_state.camp_confirmed = True  # then display socials
+                st.session_state.camp_confirmed = True
 
             # After manual lookup and confirmation, display socials
             if st.session_state.camp_confirmed and st.session_state.manual:
