@@ -53,13 +53,14 @@ def find_campaign_site(bp_url):
             lhref = href.lower()
             if not href.startswith('http'):
                 continue
-            # skip Ballotpedia internals and excluded domains
-            if 'ballotpedia.org' in lhref or any(ex in lhref for ex in CAMPAIGN_EXCLUDE):
+            # skip any link containing 'ballotpedia' and other excludes
+            if 'ballotpedia' in lhref or any(ex in lhref for ex in CAMPAIGN_EXCLUDE):
                 continue
             return href
         return None
     except requests.RequestException:
         return None
+
 
 
 def extract_social_links(url):
