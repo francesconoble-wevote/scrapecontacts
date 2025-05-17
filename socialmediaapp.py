@@ -17,8 +17,8 @@ SOCIAL_PATTERNS = {
     'Bluesky': r'bsky\.app/',
 }
 
-# Domains to exclude when scraping social links
-EXCLUDE_DOMAINS = ['ballotpedia', '.gov']
+# Domains to exclude when scraping social links (added 'wix')
+EXCLUDE_DOMAINS = ['ballotpedia', '.gov', 'wix']
 
 # Campaign detection exclusions
 CAMPAIGN_EXCLUDE = ['jotform.com', 'docs.google.com', 'forms.google.com']
@@ -41,18 +41,23 @@ def find_ballotpedia_url(name):
 
 
 def find_campaign_site(bp_url):
+    """Find the first external link on the Ballotpedia page that isn't BP or excluded."""
     if not bp_url:
         return None
     try:
         resp = requests.get(bp_url, headers=HEADERS, timeout=10)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
-        text = soup.get_text(separator=' ').lower()
-        # Only proceed if mentions campaign site
-        if 'campaign site' not in text and 'campaign website' not in text:
-            return None
-        # Infobox and anchor-text extraction logic (omitted for brevity)
-        return None  # Placeholder for actual detection
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            lhref = href.lower()
+            if not href.startswith('http'):
+                continue
+            # skip Ballotpedia internals and excluded domains
+            if 'ballotpedia.org' in lhref or any(ex in lhref for ex in CAMPAIGN_EXCLUDE):
+                continue
+            return href
+        return None
     except requests.RequestException:
         return None
 
@@ -64,16 +69,16 @@ def extract_social_links(url):
         r = requests.get(url, headers=HEADERS, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
-        links = [a['href'] for a in soup.find_all('a', href=True)]
         socials = {}
         for name, pat in SOCIAL_PATTERNS.items():
-            for link in links:
-                l = link.lower()
-                if any(ex in l for ex in EXCLUDE_DOMAINS):
+            match = soup.find('a', href=re.compile(pat, re.IGNORECASE))
+            if match:
+                href = match['href']
+                lhref = href.lower()
+                # skip excluded domains including wix
+                if any(ex in lhref for ex in EXCLUDE_DOMAINS):
                     continue
-                if re.search(pat, link, re.IGNORECASE):
-                    socials[name] = link
-                    break
+                socials[name] = href
         return socials
     except requests.RequestException:
         return {}
@@ -86,12 +91,13 @@ def get_candidate_socials(name):
     socials_camp = extract_social_links(camp) if camp else {}
     return bp, camp, socials_bp, socials_camp
 
+
 # Streamlit UI
 st.title("Ballotpedia Social Scraper")
 name = st.text_input('Candidate Name')
 lookup = st.button('Lookup')
 
-# Initialize session state once
+# Initialize session state
 if 'lookup_done' not in st.session_state:
     st.session_state.lookup_done = False
     st.session_state.bp = None
@@ -99,6 +105,7 @@ if 'lookup_done' not in st.session_state:
     st.session_state.socials_bp = {}
     st.session_state.socials_camp = {}
     st.session_state.manual = ''
+    st.session_state.confirm = None
 
 # Perform lookup
 if lookup and name:
@@ -109,8 +116,9 @@ if lookup and name:
     st.session_state.socials_camp = scap
     st.session_state.lookup_done = True
     st.session_state.manual = ''
+    st.session_state.confirm = None
 
-# Show results only after pressing Lookup
+# Show results after lookup
 if st.session_state.lookup_done:
     # Ballotpedia URL
     if st.session_state.bp:
@@ -118,22 +126,43 @@ if st.session_state.lookup_done:
     else:
         st.error('Ballotpedia page not found.')
 
-    # Campaign site display or manual input
+    # Campaign site detection + user confirmation
     if st.session_state.bp:
         if st.session_state.camp:
-            st.markdown(f"**Campaign Site:** [Link]({st.session_state.camp})")
+            st.subheader("Detected Campaign Site")
+            st.markdown(f"[{st.session_state.camp}]({st.session_state.camp})")
+            st.session_state.confirm = st.radio(
+                "Is this the correct campaign site?",
+                ("Yes", "No"),
+                key="confirm_site"
+            )
+            if st.session_state.confirm == "No":
+                manual = st.text_input(
+                    'Enter campaign site URL manually',
+                    value=st.session_state.manual,
+                    key="manual_site"
+                )
+                if manual and manual != st.session_state.camp:
+                    st.session_state.manual = manual
+                    st.session_state.camp = manual
+                    st.session_state.socials_camp = extract_social_links(manual)
         else:
             st.warning('Campaign site not found on Ballotpedia.')
-            manual = st.text_input('Enter campaign site URL manually', value=st.session_state.manual)
-            if manual and manual != st.session_state.camp:
+            manual = st.text_input(
+                'Enter campaign site URL manually',
+                value=st.session_state.manual,
+                key="manual_site"
+            )
+            if manual:
                 st.session_state.manual = manual
                 st.session_state.camp = manual
                 st.session_state.socials_camp = extract_social_links(manual)
-            # If manual was entered, show it
-            if st.session_state.manual:
-                st.markdown(f"**Campaign Site:** [Link]({st.session_state.manual})")
 
-    # After both Ballotpedia and campaign URL exist
+        # If user provided manual URL, show it
+        if st.session_state.manual:
+            st.markdown(f"**Campaign Site:** [Link]({st.session_state.manual})")
+
+    # Merge and display social links
     if st.session_state.bp and st.session_state.camp:
         merged = {**st.session_state.socials_bp, **st.session_state.socials_camp}
         if merged:
