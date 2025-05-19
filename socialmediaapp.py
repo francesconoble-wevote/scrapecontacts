@@ -159,7 +159,6 @@ def get_candidate_socials(name):
     socials_camp = extract_social_links(camp) if camp else {}
     return bp, camp, socials_bp, socials_camp
 
-
 # --- Streamlit UI ---
 
 st.title("Ballotpedia Social Scraper")
@@ -177,7 +176,6 @@ if 'lookup_done' not in st.session_state:
     st.session_state.camp_confirmed = None
     st.session_state.manual = ''
 
-# Perform lookup
 if lookup and name:
     bp, camp, sbp, scap = get_candidate_socials(name)
     st.session_state.bp = bp
@@ -188,16 +186,14 @@ if lookup and name:
     st.session_state.camp_confirmed = None
     st.session_state.manual = ''
 
-# After lookup, show Ballotpedia and campaign logic
 if st.session_state.lookup_done:
-    # Ballotpedia link
+    # --------------------
+    # Ballotpedia Found?
+    # --------------------
     if st.session_state.bp:
         st.markdown(f"**Ballotpedia Page:** [Link]({st.session_state.bp})")
-    else:
-        st.error('Ballotpedia page not found.')
 
-    # Campaign site detection
-    if st.session_state.bp:
+        # --- existing campaign‐site detection & confirmation UI here ---
         if st.session_state.camp and st.session_state.camp_confirmed is None:
             st.subheader("Detected Campaign Site")
             st.markdown(f"[{st.session_state.camp}]({st.session_state.camp})")
@@ -207,7 +203,6 @@ if st.session_state.lookup_done:
             if col2.button("Reject Campaign Site"):
                 st.session_state.camp_confirmed = False
 
-        # If accepted, show all socials
         if st.session_state.camp_confirmed:
             merged = {**st.session_state.socials_bp, **st.session_state.socials_camp}
             if merged:
@@ -217,10 +212,8 @@ if st.session_state.lookup_done:
             else:
                 st.info('No social media links found.')
 
-        # If rejected or no campaign found, allow manual entry
-        if st.session_state.camp_confirmed is False or (st.session_state.camp is None):
-            if st.session_state.camp_confirmed is False:
-                st.warning("Please provide the correct campaign site URL:")
+        if st.session_state.camp_confirmed is False or st.session_state.camp is None:
+            st.warning("Please provide the correct campaign site URL:")
             manual = st.text_input('Manual Campaign Site URL', value=st.session_state.manual)
             if st.button("Lookup Manual Campaign Site"):
                 st.session_state.manual = manual
@@ -228,7 +221,6 @@ if st.session_state.lookup_done:
                 st.session_state.socials_camp = extract_social_links(manual)
                 st.session_state.camp_confirmed = True
 
-            # After manual lookup and confirmation, display socials
             if st.session_state.camp_confirmed and st.session_state.manual:
                 merged = {**st.session_state.socials_bp, **st.session_state.socials_camp}
                 if merged:
@@ -237,3 +229,25 @@ if st.session_state.lookup_done:
                         st.write(f"- **{plat}:** {link}")
                 else:
                     st.info('No social media links found.')
+
+    # -----------------------------------
+    # Ballotpedia NOT Found → Manual Flow
+    # -----------------------------------
+    else:
+        st.error('Ballotpedia page not found.')
+        st.warning("Please provide the campaign site URL manually:")
+        manual = st.text_input('Manual Campaign Site URL', value=st.session_state.manual)
+        if st.button("Lookup Manual Campaign Site"):
+            st.session_state.manual = manual
+            st.session_state.camp = manual
+            st.session_state.socials_camp = extract_social_links(manual)
+            st.session_state.camp_confirmed = True
+
+        if st.session_state.camp_confirmed and st.session_state.manual:
+            merged = {**st.session_state.socials_bp, **st.session_state.socials_camp}
+            if merged:
+                st.subheader('Social Media Links')
+                for plat, link in merged.items():
+                    st.write(f"- **{plat}:** {link}")
+            else:
+                st.info('No social media links found.')
